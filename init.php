@@ -56,7 +56,7 @@ class Social extends Plugin {
 						content as content_preview, cached_content, 
 						author,score
 					FROM
-						ttrss_entries,ttrss_user_entries,ttrss_feeds,ttrss_labels2,ttrss_user_labels2,
+						ttrss_entries,ttrss_user_entries,ttrss_feeds,
 						ttrss_social_comments,ttrss_social_friends
 					WHERE
 						ttrss_user_entries.feed_id = ttrss_feeds.id AND
@@ -70,6 +70,8 @@ class Social extends Plugin {
 					ORDER BY $date_sort_field DESC, updated DESC
 					LIMIT 0, 30";
 
+		//ttrss_labels2,ttrss_user_labels2,			
+					
 		//$query = "SELECT * FROM ttrss_entries LIMIT 0,10";
 		$result = $this->dbh->query($query);
 
@@ -99,7 +101,7 @@ class Social extends Plugin {
 	}
 
 	function requestUser() {
-		$user = $this->dbh->db_escape_string($_POST["user"]);
+		$user = $this->dbh->escape_string($_POST["user"]);
 		$uid = $_SESSION["uid"];
 
 		//$this->host->set($this, "social", $user);
@@ -116,13 +118,10 @@ class Social extends Plugin {
 
 				switch ($status) {
 				    case "pending":
-				        echo "$user didn't accept your request yet. Please be patient...";
-				        break;
-				    case "rejected":
-				        echo "Sorry, $user has already rejected your friend request.";
+				        echo "$user hasn't accepted your request yet. Please be patient...";
 				        break;
 				    case "accepted":
-				        echo "Great, $user and you are already friends!";
+				        echo "$user and you are already friends!";
 				        break;
 				}
 				return;
@@ -133,19 +132,19 @@ class Social extends Plugin {
 		}
 
 		$this->dbh->query("INSERT INTO ttrss_social_friends (user_id, friend_id, status) VALUES ($uid, $user_id, 'pending')");
-		echo "You have requested friendship with $user. If $user accepts your request, you can share articles and comment on them!";
+		echo "You have requested to be friends with $user. If $user accepts your request, you can share articles and comment on them!";
 	}
 
 	function rejectUser() {
-		$user_id = $this->dbh->db_escape_string($_POST["user"]);
+		$user_id = $this->dbh->escape_string($_POST["user"]);
 		$uid = $_SESSION["uid"];
 		
-		$result = $this->dbh->query("UPDATE ttrss_social_friends SET status = 'rejected'");
+		$result = $this->dbh->query("DELETE from ttrss_social_friends WHERE user_id = $user_id AND friend_id = $uid AND status = 'pending'");
 		echo "Rejected request.";
 	}
 
 	function acceptUser() {
-		$user_id = $this->dbh->db_escape_string($_POST["user"]);
+		$user_id = $this->dbh->escape_string($_POST["user"]);
 		$uid = $_SESSION["uid"];
 		
 		$result = $this->dbh->query("UPDATE ttrss_social_friends SET status = 'accepted'");
@@ -172,7 +171,10 @@ class Social extends Plugin {
 	}
 
 	function hook_render_article_cdm($article) {
-		$comments = "";
+		$articleID = $article["id"];
+		$comments = <<<HTML
+		<div class='social_wrapper' id='POSTCOMMENT-$articleID'>
+HTML;
 
 		$result = $this->dbh->query("SELECT c.*,u.login FROM ttrss_social_comments c LEFT JOIN ttrss_users u ON c.user_id = u.id WHERE entry_id = ".$article["id"]."");
 
@@ -182,28 +184,29 @@ class Social extends Plugin {
 			$created = $row["created"];
 			$comments .= <<<HTML
 			<div class='social_message'>
-				<span class='social_comment'>$comment</span>
 				<span class='social_user'>$user</span>
 				<span class='social_created'>($created)</span>
+				<span class='social_comment'>$comment</span>
 			</div>
-			<div></div>
 HTML;
 		}
-
-		$result = $this->dbh->query("SELECT e.ref_id,e.owner_uid,u.login FROM ttrss_user_entries e LEFT JOIN ttrss_users u ON e.owner_uid = u.id WHERE e.ref_id = ".$article["id"]."");
-		$user_name = db_fetch_result($result, 0, "login");
+		$comments .= <<<HTML
+		</div>
+HTML;
+		//$result = $this->dbh->query("SELECT e.ref_id,e.owner_uid,u.login FROM ttrss_user_entries e LEFT JOIN ttrss_users u ON e.owner_uid = u.id WHERE e.ref_id = ".$article["id"]."");
+		//$user_name = db_fetch_result($result, 0, "login");
 
 		$article["content"] = $article["content"] . $comments;
 		//$article["feed_title"] = "{$user_name}'s Social";
-		$article["orig_feed_id"] = 0;
-		$article["feed_id"] = 0;
+		//$article["orig_feed_id"] = 0;
+		//$article["feed_id"] = 0;
 
 		return $article;
 	}
 
 	function add() {
 		// param is the article ref_id
-		$param = $this->dbh->db_escape_string($_REQUEST['param']);
+		$param = $this->dbh->escape_string($_REQUEST['param']);
 
 		print "<input dojoType=\"dijit.form.TextBox\" style=\"display : none\" name=\"id\" value=\"$param\">";
 		print "<input dojoType=\"dijit.form.TextBox\" style=\"display : none\" name=\"op\" value=\"pluginhandler\">";
@@ -227,22 +230,21 @@ HTML;
 	}
 
 	function addComment() {
-		$article_id = $this->dbh->db_escape_string($_REQUEST["id"]);
-		$comment = trim(strip_tags($this->dbh->db_escape_string($_REQUEST["comment"])));
+		$article_id = $this->dbh->escape_string($_REQUEST["id"]);
+		$comment = trim(strip_tags($this->dbh->escape_string($_REQUEST["comment"])));
 		$uid = $_SESSION["uid"];
 
 		$this->dbh->query("INSERT INTO ttrss_social_comments (entry_id, user_id, created, comment) 
 								VALUES ($article_id, $uid, Now(), '$comment')");;
 		
-		label_add_article("Social - Comments", $uid);
+		label_add_article($article_id, "Social - Comments", $uid);
 
 		$this->dbh->query("UPDATE ttrss_user_entries 
 								SET unread = true
 								WHERE ref_id = '$article_id' 
 									AND owner_uid = $uid");
-		return;
 
-		print json_encode(array("note" => $comment,
+		print json_encode(array("comment" => $comment,
 				"raw_length" => mb_strlen($comment)));
 	}
 
@@ -252,23 +254,18 @@ HTML;
 
 		print "<div dojoType=\"dijit.layout.AccordionPane\" title=\"".__("Social")."\">";
 
-
-		print "<h2>Friends</h2>";
-
-		$this->print_friend_requests();
-
 		$result = $this->dbh->query("SELECT login FROM ttrss_users LIMIT 0, 500");
 		$users = "";
 		if(db_num_rows($result) != 0) {
 			while ($row = db_fetch_assoc($result)) {
-				$users .= "<option value='".$row["login"]."' />";
+				$users .= "<option value='".$row["login"]."'>".$row["login"]."</option>";
 			}
 		}
 
 		echo <<<HTML
-		<h2>Request friendship</h2>
+		<h2>Friend Request</h2>
 
-		<form dojoType="dijit.form.Form">
+		<form dojoType="dijit.form.Form" id="requestSocialForm">
 			<script type="dojo/method" event="onSubmit" args="evt">
 				evt.preventDefault();
 				if (this.validate()) {
@@ -284,20 +281,18 @@ HTML;
 			<input dojoType="dijit.form.TextBox" style="display: none" name="op" value="pluginhandler">
 			<input dojoType="dijit.form.TextBox" style="display: none" name="method" value="requestUser">
 			<input dojoType="dijit.form.TextBox" style="display: none" name="plugin" value="social">
-			<table width="100%" class="prefPrefsList">
-				<tr>
-					<td width="20%" valign="top">Add a friend by its username</td>
-					<td width="80%" class="prefValue">
-						<input dojoType="dijit.form.ValidationTextBox" required="1" name="user" value="$value" list="users"><br/>
-						<button dojoType="dijit.form.Button" type="submit">Request user</button>
-						<datalist id="users">$users</datalist>
-					</td>
-				</tr>
-			</table>
-			
+			<p>
+				Friend's Username:&nbsp;
+				<input dojoType="dijit.form.ValidationTextBox" required="1" name="user" value="$value" list="users">
+				<datalist id="users">$users</datalist>
+				<button dojoType="dijit.form.Button" name="submitSocial" type="submit">Send Request</button>
+			</p>
 		</form>
-		</div> <!-- closing the pane! -->
 HTML;
+
+		
+		$this->print_friend_requests();
+		echo "</div>";
 	}
 
 	public function print_friend_requests() {
@@ -306,16 +301,14 @@ HTML;
 		$this->dbh->query("CREATE TABLE IF NOT EXISTS ttrss_social_comments (id INT NOT NULL AUTO_INCREMENT, PRIMARY KEY(id), entry_id INT, user_id INT, created DATETIME, comment TEXT)");
 		$this->dbh->query("CREATE TABLE IF NOT EXISTS ttrss_social_friends (id INT NOT NULL AUTO_INCREMENT, PRIMARY KEY(id), user_id INT, friend_id INT, status ENUM('pending', 'rejected' , 'accepted') NOT NULL)");
 		
-		//$result = db_query($this->link, "SELECT id FROM ttrss_labels2 WHERE caption = 'Social - Comments' AND owner_uid = '$uid' LIMIT 1");
-		//if(db_num_rows($result) == 0) {
+		//this->dbh->query("SELECT id FROM ttrss_labels2 WHERE caption = 'Social - Comments' AND owner_uid = '$uid' LIMIT 1");
+		//if(db_num_rows($result) == 0)
 		//	label_create($this->link, "Social - Comments", '', '', $uid);
-		//	return;
-		//}
 
 		$result = $this->dbh->query("SELECT f.*, u.login FROM ttrss_social_friends f LEFT JOIN ttrss_users u ON u.id = f.user_id WHERE friend_id = '$uid' AND status = 'pending'");
-		if(db_num_rows($result) == 0) {
-			echo "No pending requests yet.";
-		} else {
+		
+		if(db_num_rows($result) > 0) {
+		echo "<h2>Pending Requests</h2>";
 		echo "<table>";
 			while ($row = db_fetch_assoc($result)) {
 				$user_id = $row["user_id"];
@@ -323,12 +316,8 @@ HTML;
 				$status = $row["status"];
 				echo <<<HTML
 					<tr>
-						<td width="300px">$user_login</td>
-						<td width="100px">($status)</td>
-HTML;
-				if($status != "rejected")
-				echo <<<HTML
-						<td>
+						<td style="padding:.5em .5em .5em 0;">$user_login</td>
+						<td style="padding:.5em;">
 							<form dojoType="dijit.form.Form">
 								<script type="dojo/method" event="onSubmit" args="evt">
 									evt.preventDefault();
@@ -349,10 +338,7 @@ HTML;
 								<button dojoType="dijit.form.Button" type="submit">Reject</button>
 							</form>
 						</td>
-HTML;
-				if($status != "accepted")
-				echo <<<HTML
-						<td>
+						<td style="padding:.5em;">
 							<form dojoType="dijit.form.Form">
 								<script type="dojo/method" event="onSubmit" args="evt">
 									evt.preventDefault();
@@ -373,41 +359,34 @@ HTML;
 								<button dojoType="dijit.form.Button" type="submit">Accept</button>
 							</form>
 						</td>
-HTML;
-				echo <<<HTML
 					</tr>
 HTML;
 			}
 			echo "</table>";
+			echo "<hr/>";
 		}
-
-		echo "<hr/>";
 
 		$result = $this->dbh->query("SELECT f.id, ua.login login_from, f.status, ub.login login_to
 											FROM ttrss_social_friends f
 											LEFT JOIN ttrss_users ua ON ua.id = f.user_id
 											LEFT JOIN ttrss_users ub ON ub.id = f.friend_id
-											WHERE f.user_id = 2 OR f.friend_id = 2");
+											WHERE ((f.user_id = $uid OR f.friend_id = $uid) AND status = 'accepted')
+											OR (f.user_id = $uid AND status = 'pending')");
+		
+		echo "<h2>Friends</h2>";		
 		if(db_num_rows($result) == 0) {
-			echo "No pending requests yet.";
+			echo "<p>No friends added yet.</p>";
 		} else {
-		echo "<table>";
 			while ($row = db_fetch_assoc($result)) {
-				$from = $row["login_from"];
-				$to = $row["login_to"];
-				$id = $row["id"];
-				$status = $row["status"];
+				$friend = $row["login_from"];
+				if($friend == $_SESSION["name"]) $friend = $row["login_to"];
 
-				if($from == $_SESSION["name"]) $from = "you";
-				if($to == $_SESSION["name"]) $to = "you";
-
-				//if($row["user_id"] == $uid) echo "$user_login has $status you";
-				//else echo "you $status $user_login";
-				//echo " $id <br/>\n";
-				echo "$from $status $to<br/>";
+				if($row["status"] == 'pending')
+					$friend .= " - Pending";
+				
+				echo "<p>$friend</p>";
 			}
 		}
-
 	}
 }
 ?>
